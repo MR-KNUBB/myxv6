@@ -20,6 +20,14 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+struct uproc{
+  int pid;
+  enum procstate state;
+  uint64 size;
+  int ppid;
+  char name[16];
+};
+
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
@@ -653,4 +661,33 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+procinfo(uint64 addr)
+{
+
+  struct proc *My = myproc();
+  struct proc *p;
+  struct uproc u;
+  int count = 0;
+  for(p = proc; p < &proc[NPROC]; p++)
+  {
+    if(p->state != UNUSED && p->state >= 0)
+    {
+      u.pid = p->pid;
+      u.size = p->sz;
+
+      for(int i = 0; i < 16; i++)
+        u.name[i] = p->name[i];
+      if(p->parent)
+        u.ppid = p->parent->pid;
+      else
+        u.ppid = 0;
+      count++;
+      copyout(My->pagetable, addr, (char *)&u, sizeof(struct uproc));
+      addr += sizeof(struct uproc);
+    }
+  }
+  return count;
 }
