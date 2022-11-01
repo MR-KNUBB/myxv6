@@ -8,18 +8,24 @@ int main(int argc, char **argv)
 {
   struct uproc uproc[NPROC];
   int nprocs;
-  nprocs = getprocs(uproc); //will return # of active processes
+  int i;
+  char *state;
+  static char *states[] = {
+    [SLEEPING] "sleeping",
+    [RUNNABLE] "runnable",
+    [RUNNING]   "running",
+    [ZOMBIE]     "zombie",
+  };
 
+  nprocs = getprocs(uproc); //will return # of active processes
   if (nprocs < 0)
     exit(-1);
 
-    // You can remove the following print statement
- // printf("\n---------%d processes active------------\n", nprocs);
-
-  printf("pid\tppid\tsize\tname\n");
-  struct uproc *u;
-  for(u = uproc; u < &uproc[nprocs]; u++){
-    printf("%d\t%d\t%d\t%s\n", u->pid, u->ppid,u->size, u->name);
+  printf("pid\tstate\t\tsize\tcputime\tppid\tname\n");
+  for(i=0; i < nprocs; i++){
+    state = states[uproc[i].state];
+    printf("%d\t %s\t %l\t %d\t %d\t %s\n", uproc[i].pid, state, uproc[i].cputime, 
+       uproc[i].size, uproc[i].ppid, uproc[i].name);
   }
 
   exit(0);

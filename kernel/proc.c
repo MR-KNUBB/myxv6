@@ -12,11 +12,20 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
+struct queue queue[NQUEUE];
+int sched_policy = MLFQ;
+
 int nextpid = 1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+
+int timeslice(int priority);
+int queue_empty(int priority);
+static int enqueue_at_tail(struct proc *p, int priority);
+static int enqueue_at_head(struct proc *p, int priority);
+static struct proc* dequeue(int priority);
 
 extern char trampoline[]; // trampoline.S
 
@@ -24,6 +33,7 @@ struct uproc{
   int pid;
   enum procstate state;
   uint64 size;
+  uint64 cputime;
   int ppid;
   char name[16];
 };
@@ -127,6 +137,12 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->cputime = 0;
+
+  p->priority = HIGH;
+  p->timeslice = TSTICKSHIGH;
+  p->yielded = 0;
+  p->next = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -252,6 +268,10 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+
+  enqueue_at_tail(p,HIGH);
+
+
   release(&p->lock);
 }
 
@@ -321,6 +341,9 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+
+  enqueue_at_head(p,HIGH);
+
   release(&np->lock);
 
   return pid;
@@ -435,6 +458,57 @@ wait(uint64 addr)
   }
 }
 
+struct rusage{
+  uint cputime;
+};
+
+int wait2(uint64 addr, uint64 rusage){
+  struct proc *np;
+  int havekids, pid;
+  struct proc *p = myproc();
+  struct rusage ru;
+
+  acquire(&wait_lock);
+
+  for(;;){
+    havekids = 0;
+    for(np = proc; np < &proc[NPROC]; np++){
+
+      if(np->parent == p){
+        acquire(&np->lock);
+        havekids=1;
+
+        if(np->state == ZOMBIE){
+          ru.cputime = np->cputime;
+          copyout(p->pagetable, rusage, (char *)&ru, sizeof(ru));
+
+          pid = np->pid;
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,sizeof(np->xstate)) < 0){
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+	  freeproc(np);
+	  release(&np->lock);
+	  release(&wait_lock);
+	  return pid;
+        }
+        release(&np->lock);
+      }
+    }
+
+    if(!havekids || p->killed){
+      release(&wait_lock);
+      return -1;
+    }
+
+    sleep(p, &wait_lock);
+  }
+}
+
+
+
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -449,7 +523,45 @@ scheduler(void)
   struct cpu *c = mycpu();
   
   c->proc = 0;
+  
   for(;;){
+    if(sched_policy == RR){
+
+        // Avoid deadlock by ensuring that devices can interrupt.
+        intr_on();
+
+        for(p = proc; p < &proc[NPROC]; p++) {
+          acquire(&p->lock);
+          if(p->state == RUNNABLE) {
+            // Switch to chosen process.  It is the process's job
+            // to release its lock and then reacquire it
+            // before jumping back to us.
+            p->state = RUNNING;
+            c->proc = p;
+
+            p->tsticks = 0;
+            swtch(&c->context, &p->context);
+
+            // Process is done running for now.
+            // It should have changed its p->state before coming back.
+            c->proc = 0;
+          }
+          release(&p->lock);
+        }//for
+      }
+
+    else{
+//            printf("IMPLEMENTING MLFQ");
+            struct proc *p;
+            //p = dequeue(HIGH);
+
+            if (!p){p = dequeue(HIGH);}
+//            if (!p){p = dequeue(LOW);}
+            if (p){dequeue(HIGH);}
+
+      }
+    }
+  /*
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
@@ -470,6 +582,7 @@ scheduler(void)
       release(&p->lock);
     }
   }
+  */
 }
 
 // Switch to scheduler.  Must hold only p->lock
@@ -506,6 +619,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  enqueue_at_tail(p,HIGH);
   sched();
   release(&p->lock);
 }
@@ -574,6 +688,7 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+	enqueue_at_tail(p,HIGH);
       }
       release(&p->lock);
     }
@@ -595,6 +710,7 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+	enqueue_at_tail(p,HIGH);
       }
       release(&p->lock);
       return 0;
@@ -677,11 +793,13 @@ procinfo(uint64 addr)
     {
       u.pid = p->pid;
       u.size = p->sz;
-
+      u.state = p->state;
+      u.cputime = p->cputime;
       for(int i = 0; i < 16; i++)
         u.name[i] = p->name[i];
-      if(p->parent)
-        u.ppid = p->parent->pid;
+      if(p->parent){
+        u.ppid = (p->parent)->pid;
+      }
       else
         u.ppid = 0;
       count++;
@@ -691,3 +809,125 @@ procinfo(uint64 addr)
   }
   return count;
 }
+
+
+void queueinit(void)
+{
+  struct queue *q;
+  int i = 0;
+
+  for(q = queue; q < &queue[NQUEUE]; q++){
+    initlock(&q->lock, "queue");
+
+    if(i==0)
+      q->timeslice = TSTICKSHIGH;
+
+    else if(i == 1)
+      q->timeslice = TSTICKSMEDIUM;
+
+    else
+      q->timeslice = TSTICKSLOW;
+
+    q->head = 0;
+    q->tail = 0;
+    i++;
+  }
+}
+
+
+int timeslice(int priority)
+{
+  if(priority == HIGH)
+    return(TSTICKSHIGH);
+  else if(priority == MEDIUM)
+    return(TSTICKSMEDIUM);
+  else if(priority == LOW)
+    return(TSTICKSLOW);
+  else{
+    printf("timeslice: invalid priority %d\n", priority);
+    return(-1);
+  }
+}
+
+int queue_empty(int priority){
+  if(!queue[priority].head)
+    return(1);
+  return(0);
+}
+
+static int enqueue_at_tail(struct proc *p, int priority)
+{
+  if(!(p >= proc && p < &proc[NPROC]))
+    panic("enqueue_at_tail");
+  if(!(priority >= 0) && (priority < NQUEUE))
+    panic("enqueue_at_tail");
+  acquire(&queue[priority].lock);
+  if((queue[priority].head == 0) && (queue[priority].tail == 0)){
+    queue[priority].head = p;
+    queue[priority].tail = p;
+    release(&queue[priority].lock);
+    return(0);
+  }
+  if(queue[priority].tail == 0) {
+    release(&queue[priority].lock);
+    panic("enqueue_at_tail");
+  }
+  queue[priority].tail->next = p;
+  queue[priority].tail = p;
+  release(&queue[priority].lock);
+  return(0);
+}
+
+
+static int enqueue_at_head(struct proc *p, int priority)
+{
+  if (!(p >= proc && p < &proc[NPROC]))
+          panic("enqueue_at_head");
+  if (!(priority >= 0) && (priority < NQUEUE))
+          panic("enqueue_at_head");
+  acquire(&queue[priority].lock);
+  if ((queue[priority].head == 0) && (queue[priority].tail == 0)) {
+    queue[priority].head = p;
+    queue[priority].tail = p;
+    release(&queue[priority].lock);
+    return(0);
+  }
+  if (queue[priority].head == 0) {
+    release(&queue[priority].lock);
+    panic("enqueue_at_head");
+  }
+  p->next = queue[priority].head;
+  queue[priority].head = p;
+  release(&queue[priority].lock);
+  return(0);
+}
+
+
+static struct proc* dequeue(int priority)
+{
+  struct proc *p;
+
+  if (!(priority >= 0) && (priority < NQUEUE)) {
+          printf("dequeue: invalid argument %d\n", priority);
+          return(0);
+  }
+  acquire(&queue[priority].lock);
+  if ((queue[priority].head == 0) && (queue[priority].tail == 0)) {
+    release(&queue[priority].lock);
+    return(0);
+  }
+  if (queue[priority].head == 0) {
+    release(&queue[priority].lock);
+    panic("dequeue");
+  }
+  p = queue[priority].head;
+  acquire(&p->lock);
+  queue[priority].head = p->next;
+  p->next = 0;
+  release(&p->lock);
+  if (!queue[priority].head)
+    queue[priority].tail = 0;
+  release(&queue[priority].lock);
+  return(p);
+}
+

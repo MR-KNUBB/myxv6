@@ -11,3 +11,15 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       1000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
+
+
+//MLFQ
+#define TSTICKSHIGH  1
+#define TSTICKSMEDIUM 50
+#define TSTICKSLOW   200
+#define NQUEUE     1
+#define HIGH       0
+#define MEDIUM     1
+#define LOW        2
+#define MLFQ       1
+#define RR         0
