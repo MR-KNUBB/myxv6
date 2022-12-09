@@ -109,6 +109,7 @@ extern uint64 sys_wait2(void);
 extern uint64 sys_freepmem(void);
 extern uint64 sys_mmap(void);
 extern uint64 sys_munmap(void);
+extern uint64 sys_fstat(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,

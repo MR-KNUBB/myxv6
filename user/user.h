@@ -29,7 +29,7 @@ int uptime(void);
 int getprocs(struct uproc*);
 int wait2(int*, struct rusage*);
 int freepmem(void);
-void *mmap(void*,uint64,int,int,int,int);
+int *mmap(void*,uint64,int,int,int,int);
 int munmap(void*,int);
 
 // ulib.c
@@ -48,3 +48,4 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+int fstat(int, struct stat*);

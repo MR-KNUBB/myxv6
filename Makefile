@@ -140,6 +140,10 @@ UPROGS=\
 	$U/_wc\
 	$U/_zombie\
 	$U/_private\
+	$U/_prodcons1\
+	$U/_prodcons2\
+	$U/_prodcons3\
+	$U/_fstat\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

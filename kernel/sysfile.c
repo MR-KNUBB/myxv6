@@ -529,17 +529,14 @@ sys_mmap()
       newmmr->valid = 0;
       return -1;
     }
-    if(flags & MAP_SHARED) {
+    if(flags & MAP_SHARED) //start and mmr_list if region is shared
       newmmr->mmr_family.listid=alloc_mmr_listid();
-      p->cur_max=start_addr;
-      return start_addr;
-    }
-    else{
+    p->cur_max=start_addr;
+    return start_addr;
+    }else{
       return -1;
     }
   }
-  return -1;
-}
 
 //unmap memory region if it exists
 //free physical memory if no other process has the region mapped
